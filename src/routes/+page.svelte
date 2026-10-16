@@ -3,8 +3,7 @@
 	import { parseLayoutWithWarnings } from '../lib/renderer/parse-layout.js';
 	import { createRenderer, applyStackChildPlacement, applyBarAccentColors, applyScrollContainers } from '../lib/renderer/render-widget.js';
 	import { prepareStylesheetCss, extractFontFaceCss } from '../lib/renderer/prepare-stylesheet.js';
-
-	let { data } = $props();
+	import { canSaveToFolder, pickFolder, folderFromHandle, folderFromFileList, findPacks, loadPack as readPack, savePackFile } from '../lib/pack-folder.js';
 
 	// Same 1080 x 1240 device the real companion display uses — scaled down for the
 	// preview column but kept at the exact same aspect ratio, never distorted.
@@ -18,7 +17,15 @@
 		{ id: 'previewData', label: 'preview-data.json', language: 'json' },
 	];
 
-	let selectedPackId = $state(data.packIds[0] ?? null);
+	/** Packs found in the picked folder (the folder itself, or its pack subfolders). */
+	let packFolders = $state([]);
+	let pickedFolderName = $state('');
+	let selectedPackId = $state(null);
+	let openError = $state('');
+	/** The loaded pack: its files, an assetUrl() for its assets/ folder, and whether it can save. */
+	let currentPack = null;
+	let readOnly = $state(false);
+	let fileInput;
 	let activeTab = $state('layout');
 	let canvasEl;
 	let defaultCss = '';
@@ -100,7 +107,7 @@
 			return;
 		}
 
-		const packBaseUrl = `/packs/${selectedPackId}`;
+		const packBaseUrl = currentPack ? currentPack.assetUrl : '';
 		let preparedCss;
 		try {
 			preparedCss = prepareStylesheetCss(styleText, packBaseUrl, defaultCss);
@@ -170,15 +177,14 @@
 
 	/** Persists one editor tab's content back to the pack's real file on disk. */
 	async function saveFile(file, content) {
-		if (!selectedPackId) return;
+		if (!currentPack) return;
+		if (!currentPack.canSave) {
+			saveStatus = 'read-only: changes are not saved';
+			return;
+		}
 		saveStatus = 'saving…';
 		try {
-			const res = await fetch(`/api/pack/${selectedPackId}`, {
-				method: 'PUT',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ file, content }),
-			});
-			if (!res.ok) throw new Error(await res.text());
+			await savePackFile(currentPack, file, content);
 			saveStatus = 'saved';
 		} catch (e) {
 			saveStatus = `error saving: ${e.message}`;
@@ -215,20 +221,32 @@
 	}
 
 	async function loadPack(packId) {
-		if (!packId || !canvasEl) return;
+		const folder = packFolders.find((f) => f.name === packId);
+		if (!folder || !canvasEl) return;
 		const myGeneration = ++renderGeneration;
 
 		await ensureDefaultCss();
 		if (myGeneration !== renderGeneration) return;
 
-		const res = await fetch(`/api/pack/${packId}`);
-		if (!res.ok) return;
-		const packData = await res.json();
-		if (myGeneration !== renderGeneration) return;
+		let packData;
+		try {
+			packData = await readPack(folder);
+		} catch (e) {
+			openError = `Could not open ${folder.name}: ${e.message}`;
+			return;
+		}
+		if (myGeneration !== renderGeneration) {
+			packData.dispose();
+			return;
+		}
+		currentPack?.dispose();
+		currentPack = packData;
+		readOnly = !packData.canSave;
+		openError = '';
 
-		layoutText = packData.layoutJson ?? '';
-		styleText = packData.styleCss ?? '';
-		previewDataText = packData.previewDataJson ?? JSON.stringify(packData.previewData, null, 2);
+		layoutText = packData.layoutJson;
+		styleText = packData.styleCss;
+		previewDataText = packData.previewDataJson ?? '{}';
 		previewDataError = '';
 		saveStatus = '';
 		// Like the device: UI state starts empty (apart from each pages widget's initial page)
@@ -247,9 +265,46 @@
 		rebuildAndRender();
 	}
 
-	$effect(() => {
+	/** Shows the packs in a picked folder and opens the first one. */
+	async function usePickedFolder(folder) {
+		const found = await findPacks(folder);
+		pickedFolderName = folder.name;
+		if (found.length === 0) {
+			packFolders = [];
+			selectedPackId = null;
+			openError = `No pack in "${folder.name}": pick a folder with a manifest.json, or a folder of packs.`;
+			return;
+		}
+		openError = '';
+		packFolders = found;
+		selectedPackId = found[0].name;
 		loadPack(selectedPackId);
-	});
+	}
+
+	async function openFolder() {
+		if (!canSaveToFolder()) {
+			// No File System Access API (Firefox, Safari): read-only folder upload instead.
+			fileInput.click();
+			return;
+		}
+		try {
+			const handle = await pickFolder();
+			if (handle) await usePickedFolder(folderFromHandle(handle));
+		} catch (e) {
+			openError = `Could not open the folder: ${e.message}`;
+		}
+	}
+
+	function onFolderInput(event) {
+		const files = event.currentTarget.files;
+		if (files?.length) usePickedFolder(folderFromFileList(files));
+		event.currentTarget.value = '';
+	}
+
+	function onPackSelect(event) {
+		selectedPackId = event.currentTarget.value;
+		loadPack(selectedPackId);
+	}
 </script>
 
 <svelte:head>
@@ -264,11 +319,19 @@
 	<header>
 		<span class="mark" aria-hidden="true"></span>
 		<h1>GBADuo Companion Simulator</h1>
-		<select bind:value={selectedPackId}>
-			{#each data.packIds as packId (packId)}
-				<option value={packId}>{packId}</option>
-			{/each}
-		</select>
+		<button type="button" class="open-folder" onclick={openFolder}>Open pack folder…</button>
+		<input bind:this={fileInput} type="file" webkitdirectory hidden onchange={onFolderInput} />
+		{#if packFolders.length > 1}
+			<select value={selectedPackId} onchange={onPackSelect} aria-label="Pack in {pickedFolderName}">
+				{#each packFolders as pack (pack.name)}
+					<option value={pack.name}>{pack.name}</option>
+				{/each}
+			</select>
+		{:else if packFolders.length === 1}
+			<span class="pack-name">{packFolders[0].name}</span>
+		{/if}
+		{#if readOnly}<span class="read-only">read-only — edits aren't saved in this browser</span>{/if}
+		{#if openError}<p class="warning-banner">{openError}</p>{/if}
 		{#if defaultCssSource === 'fallback'}
 			<p class="warning-banner">
 				Could not read default.css from the sibling gbaduo repo — using a bundled copy, which may be stale.
@@ -304,6 +367,9 @@
 
 		<section class="preview-column">
 			<label for="canvas-frame">Preview — {DEVICE_WIDTH} × {DEVICE_HEIGHT}</label>
+			{#if packFolders.length === 0}
+				<p class="empty-hint">Open a pack folder (one with a <code>manifest.json</code>) or a folder of packs.</p>
+			{/if}
 			<div id="canvas-frame" class="canvas-frame" style="width: {DEVICE_WIDTH * PREVIEW_SCALE}px; height: {DEVICE_HEIGHT * PREVIEW_SCALE}px;">
 				<div class="canvas-scaler" style="transform: scale({PREVIEW_SCALE});">
 					<div bind:this={canvasEl} class="canvas"></div>
@@ -380,6 +446,32 @@
 		border: 1px solid #111111;
 		border-radius: 0;
 		min-width: 240px;
+	}
+
+	.open-folder {
+		font-family: 'Inter', sans-serif;
+		font-size: 13px;
+		font-weight: 600;
+		padding: 6px 12px;
+		background: #111111;
+		color: #ffffff;
+		border: 1px solid #111111;
+		cursor: pointer;
+	}
+
+	.open-folder:hover {
+		background: #d40000;
+		border-color: #d40000;
+	}
+
+	.pack-name {
+		font-size: 13px;
+		font-weight: 600;
+	}
+
+	.read-only {
+		font-size: 11px;
+		color: #666666;
 	}
 
 	select:focus {
@@ -491,6 +583,12 @@
 		border: 1px solid #111111;
 		overflow: hidden;
 		line-height: 0;
+	}
+
+	.empty-hint {
+		margin: 0 0 12px;
+		font-size: 13px;
+		color: #666666;
 	}
 
 	.ui-panel {

@@ -5,11 +5,12 @@ import { parseLayout } from './parse-layout.js';
 import { createRenderer, applyStackChildPlacement, applyBarAccentColors, applyScrollContainers } from './render-widget.js';
 import { prepareStylesheetCss } from './prepare-stylesheet.js';
 
+// Renders the real packs with the app's real default.css, when both sibling repos are cloned
+// next to this one (../gbaduo-companions, ../gbaduo); skipped otherwise.
 const PACKS_DIR = join(process.cwd(), '..', 'gbaduo-companions');
-const DEFAULT_CSS = readFileSync(
-	join(process.cwd(), '..', 'gbaduo', 'app', 'src', 'main', 'assets', 'companion', 'default.css'),
-	'utf-8',
-);
+const DEFAULT_CSS_PATH = join(process.cwd(), '..', 'gbaduo', 'app', 'src', 'main', 'assets', 'companion', 'default.css');
+const HAS_SIBLINGS = existsSync(PACKS_DIR) && existsSync(DEFAULT_CSS_PATH);
+const DEFAULT_CSS = HAS_SIBLINGS ? readFileSync(DEFAULT_CSS_PATH, 'utf-8') : '';
 
 // harvest-moon-fomt-companion has no preview-data.json (built before that convention existed
 // for it); this fixture matches its real binding shape (a `$loves` list of bachelorette
@@ -42,7 +43,7 @@ afterEach(() => {
 	document.head.querySelectorAll('style[data-real-pack-test]').forEach((el) => el.remove());
 });
 
-describe.each(['pokemon-firered-companion', 'harvest-moon-fomt-companion'])('real pack: %s', (packId) => {
+describe.skipIf(!HAS_SIBLINGS).each(['pokemon-firered-companion', 'harvest-moon-fomt-companion'])('real pack: %s', (packId) => {
 	it('renders without throwing and every bar gets a fill part', () => {
 		const packDir = join(PACKS_DIR, packId);
 		const layoutJson = readFileSync(join(packDir, 'layout.json'), 'utf-8');

@@ -1,5 +1,6 @@
 import { resolve, interpolate, isTruthy, asNumber, asList, scopedValues } from './binding.js';
 import { parseScriptResult } from './actions.js';
+import { assetUrl } from './prepare-stylesheet.js';
 
 // Matches the Thor's companion display: 369dpi / 160 = 2.30625x, the same multiplier
 // WidgetRenderer.kt's `px(dpValue) = (dpValue * dp).toInt()` uses. Only applies to legacy
@@ -34,7 +35,8 @@ function createStore(initialUi) {
 }
 
 /**
- * @param packBaseUrl base path assets/fonts resolve against, e.g. `/packs/{id}`.
+ * @param packBaseUrl what assets/fonts resolve against: a URL prefix like `/packs/{id}`, or a
+ *   function mapping a path under assets/ to a URL (see prepare-stylesheet.js assetUrl).
  * @param options.onCall (name, args) => void — a tap's `call` action. The simulator has
  *   no Lua, so this is where the caller can log/show it.
  * @param options.onUiChange (ui) => void — after any UI state change from a tap.
@@ -232,7 +234,7 @@ export function createRenderer(packBaseUrl, options = {}) {
 		if ('bold' in legacy && legacy.bold) el.style.fontWeight = 'bold';
 		if ('font' in legacy) {
 			const fontFamily = legacy.font.replace(/[^a-zA-Z0-9]/g, '_');
-			ensureFontFace(fontFamily, `${packBaseUrl}/assets/${legacy.font}`);
+			ensureFontFace(fontFamily, assetUrl(packBaseUrl, legacy.font));
 			el.style.fontFamily = `"${fontFamily}"`;
 		}
 	}
@@ -290,7 +292,7 @@ export function createRenderer(packBaseUrl, options = {}) {
 			if (key === shownKey) return;
 			shownKey = key;
 			if (typeof key === 'string' && key.startsWith('asset:')) {
-				el.src = `${packBaseUrl}/assets/${key.slice('asset:'.length)}`;
+				el.src = assetUrl(packBaseUrl, key.slice('asset:'.length));
 				el.removeAttribute('title');
 			} else {
 				// A transparent pixel, not a missing src: Chromium draws a gray placeholder border

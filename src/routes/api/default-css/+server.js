@@ -3,12 +3,10 @@ import { join } from 'node:path';
 import { json } from '@sveltejs/kit';
 import { DEFAULT_CSS_FALLBACK } from '../../../lib/renderer/default-css-fallback.js';
 
-// Two levels up from `simulator/`: gbaduo-companions/simulator -> gbaduo-companions -> Roomativ,
-// then into the sibling `gbaduo` repo. Read live (not copied at build time) so this can never
+// The sibling `gbaduo` app repo, next to this one. Read live (not copied at build time) so this can never
 // drift from whatever the Compose engine currently ships.
 const DEFAULT_CSS_PATH = join(
 	process.cwd(),
-	'..',
 	'..',
 	'gbaduo',
 	'app',

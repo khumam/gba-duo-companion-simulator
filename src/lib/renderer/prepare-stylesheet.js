@@ -162,15 +162,23 @@ function rescalePxLengths(body) {
 	});
 }
 
+/**
+ * URL for a file under the pack's assets/ folder. `packBase` is either a URL prefix
+ * (`/packs/{id}` → `/packs/{id}/assets/...`) or a function mapping the path to a URL (the
+ * simulator's picked folders hand out blob URLs).
+ */
+export function assetUrl(packBase, relativePath) {
+	return typeof packBase === 'function' ? packBase(relativePath) : `${packBase}/assets/${relativePath}`;
+}
+
 function rewriteUrls(body, packBaseUrl) {
 	return body.replace(/url\(\s*(['"]?)([^'")]+)\1\s*\)/g, (_match, quote, path) => {
 		if (/^(https?:|data:|\/)/.test(path)) return `url(${quote}${path}${quote})`;
 		// The real engine resolves a stylesheet's url() relative to the pack's root directory
 		// (CssParser.resolveUrl), so an author writes "assets/fonts/x.ttf" meaning exactly that
-		// path under the pack root. The simulator serves assets at /packs/{id}/assets/..., so
-		// strip a leading "assets/" before appending — otherwise an already-"assets/"-prefixed
-		// path doubles up into .../assets/assets/fonts/x.ttf and 404s.
+		// path under the pack root. assetUrl() takes paths under assets/, so strip a leading
+		// "assets/" — otherwise it doubles up into .../assets/assets/fonts/x.ttf and 404s.
 		const relativePath = path.startsWith('assets/') ? path.slice('assets/'.length) : path;
-		return `url("${packBaseUrl}/assets/${relativePath}")`;
+		return `url("${assetUrl(packBaseUrl, relativePath)}")`;
 	});
 }
